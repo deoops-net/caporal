@@ -1,0 +1,9 @@
+kind: pipline
+name: doplet
+
+steps:
+  - name: testing
+    image: golang:1.12-alpine
+    commands:
+      - go test .
+      - go build .
