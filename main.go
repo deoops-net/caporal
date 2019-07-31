@@ -52,6 +52,25 @@ type Container struct {
 type ContainerOptions struct {
 	// Publish equals to -p flag e.g. Publish: {"8080:80", "4431:443"}
 	Publish []string `json:"publish"`
+	Network string   `json:"network"`
+}
+
+func (c Container) Pull() (err error) {
+
+	if err = DockerClient.PullImage(docker.PullImageOptions{
+		Repository:    c.Repo,
+		Tag:           c.Tag,
+		OutputStream:  nil,
+		RawJSONStream: false,
+	}, docker.AuthConfiguration{
+		Username: AUTH_USER,
+		Password: AUTH_PASS,
+	}); err != nil {
+		log.Error(err)
+		return
+	}
+
+	return
 }
 
 func (c Container) Start() (err error) {
@@ -65,6 +84,7 @@ func (c Container) Start() (err error) {
 		HostConfig: &docker.HostConfig{
 			PortBindings:    c.CreateBindingPorts(),
 			PublishAllPorts: true,
+			NetworkMode:     c.Opts.Network,
 		},
 	})
 	if err != nil {
@@ -162,9 +182,15 @@ func initServer() {
 	e.PUT("/container", func(c echo.Context) (err error) {
 		ct := Container{}
 		if err = c.Bind(&ct); err != nil {
+			log.Error(err)
 			return err
 		}
 		log.Debug(ct)
+
+		if err = ct.Pull(); err != nil {
+			log.Error(err)
+			return
+		}
 
 		act, err := GetContainerByName(ct.Name)
 		if err != nil {
@@ -176,6 +202,7 @@ func initServer() {
 		if reflect.DeepEqual(act, docker.APIContainers{}) {
 			log.Debug("no container found")
 			if err = ct.Start(); err != nil {
+				log.Error(err)
 				return
 			}
 			return
@@ -263,6 +290,8 @@ func Auth(next echo.HandlerFunc) echo.HandlerFunc {
 			if err = next(c); err != nil {
 				c.Error(err)
 			}
+
+			log.Debug("auth success")
 		}()
 
 		// not specify auth method skip
@@ -277,6 +306,7 @@ func Auth(next echo.HandlerFunc) echo.HandlerFunc {
 
 		d, _ := base64.StdEncoding.DecodeString(authCode)
 		d = Decrypt(d, SALT)
+		log.Debug(string(d))
 		up := strings.Split(string(d), ":")
 
 		if len(up) != 2 {
