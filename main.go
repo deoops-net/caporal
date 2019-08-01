@@ -52,7 +52,14 @@ type Container struct {
 type ContainerOptions struct {
 	// Publish equals to -p flag e.g. Publish: {"8080:80", "4431:443"}
 	Publish []string `json:"publish"`
-	Network string   `json:"network"`
+	// Network equals to --network flag
+	Network string       `json:"network"`
+	Mount   []HostVolume `json:"mount"`
+}
+
+type HostVolume struct {
+	Bind string `json:"bind"`
+	Type string `json:"type"`
 }
 
 func (c Container) Pull() (err error) {
@@ -85,6 +92,8 @@ func (c Container) Start() (err error) {
 			PortBindings:    c.CreateBindingPorts(),
 			PublishAllPorts: true,
 			NetworkMode:     c.Opts.Network,
+			//Binds:           c.Opts.Binds,
+			Mounts: c.CreateHostMounts(),
 		},
 	})
 	if err != nil {
@@ -96,6 +105,29 @@ func (c Container) Start() (err error) {
 	}
 
 	return
+}
+
+func (c Container) CreateHostMounts() []docker.HostMount {
+	hostMounts := []docker.HostMount{}
+	if c.Opts.Mount != nil {
+		for _, b := range c.Opts.Mount {
+			data := strings.Split(b.Bind, ":")
+			//src, _ := filepath.Abs(data[0])
+			//log.Debug(src)
+			if len(data) != 2 {
+				continue
+			}
+			hm := docker.HostMount{
+				Target:   data[1],
+				Source:   data[0],
+				ReadOnly: false,
+				Type:     b.Type,
+			}
+			hostMounts = append(hostMounts, hm)
+		}
+	}
+
+	return hostMounts
 }
 
 func (c Container) CreateExposePorts() map[docker.Port]struct{} {
@@ -197,7 +229,7 @@ func initServer() {
 			log.Error(err)
 			return err
 		}
-		// no container created before
+		// no container found created before
 		// create one
 		if reflect.DeepEqual(act, docker.APIContainers{}) {
 			log.Debug("no container found")
@@ -211,13 +243,19 @@ func initServer() {
 		log.Debug(act)
 
 		if err = DockerClient.StopContainer(act.ID, 0); err != nil {
-			return
+			if _, ok := err.(*docker.ContainerNotRunning); ok {
+				log.Debug("container is stopped")
+			} else {
+				log.Error(err)
+				return
+			}
 		}
 
 		if err = DockerClient.RemoveContainer(docker.RemoveContainerOptions{
 			ID:    act.ID,
 			Force: true,
 		}); err != nil {
+			log.Error(err)
 			return
 		}
 
