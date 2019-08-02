@@ -52,6 +52,7 @@ func DeleteContainer(c echo.Context) (err error) {
 	return
 }
 func UpdateContainer(c echo.Context) (err error) {
+	log.Debug("alksd")
 	defer CommonRes(c, &err)
 	ct := driver.Container{}
 	if err = c.Bind(&ct); err != nil {

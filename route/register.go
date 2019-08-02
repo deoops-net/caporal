@@ -9,7 +9,7 @@ import (
 	"github.com/labstack/gommon/log"
 )
 
-func Register(e echo.Echo) {
+func Register(e *echo.Echo) {
 	// create container
 	// curl -H 'Content-Type:application/json' -d '{"repo": "nginx", "tag": "latest", "name": "mynginx", "opts": {"publish": ["10005:80"]}}' 'localhost:8080/container'
 	e.POST("/container", CreateContainer)
@@ -27,8 +27,8 @@ func Register(e echo.Echo) {
 }
 
 func CommonRes(c echo.Context, err *error) {
-	if err != nil {
-		log.Error(err)
+	if (*err) != nil {
+		log.Error((*err).Error())
 		_ = c.JSON(http.StatusInternalServerError, &conf.RespMsg{Msg: (*err).Error()})
 		return
 	}

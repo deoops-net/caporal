@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/doops-net/caporal/route"
+
 	"github.com/doops-net/caporal/conf"
 
 	"github.com/doops-net/caporal/driver"
@@ -44,6 +46,8 @@ func main() {
 func startServer() {
 	e := echo.New()
 	e.Use(Auth)
+	route.Register(e)
+
 	log.Fatal(e.Start(":8080"))
 }
 

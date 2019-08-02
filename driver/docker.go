@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -56,6 +57,9 @@ func (c Container) Pull() (err error) {
 
 func (c Container) Start() (err error) {
 
+	fmt.Println("aisjdoajsod")
+	fmt.Println(c.Opts.Network)
+	log.Debug(c.Opts.Network)
 	dct, err := DockerClient.CreateContainer(docker.CreateContainerOptions{
 		Name: c.Name,
 		Config: &docker.Config{
