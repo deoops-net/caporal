@@ -6,29 +6,28 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"reflect"
 	"strings"
 
-	docker "github.com/fsouza/go-dockerclient"
+	"github.com/doops-net/caporal/conf"
+
+	"github.com/doops-net/caporal/driver"
+
 	"github.com/labstack/echo/v4"
 
 	log "github.com/sirupsen/logrus"
 )
 
 var SALT = "caoral-salt"
-var AUTH_USER string
-var AUTH_PASS string
 
 // TODO
 // - [ ] test remote api
 // - [ ]
 
 func init() {
-	AUTH_PASS = os.Getenv("AUTH_PASS")
-	AUTH_USER = os.Getenv("AUTH_USER")
-
-	if len(AUTH_USER) != 0 && len(AUTH_PASS) != 0 {
-		token := base64.StdEncoding.EncodeToString(Encrypt([]byte(AUTH_USER+":"+AUTH_PASS), SALT))
+	conf.AUTH_PASS = os.Getenv("AUTH_PASSWORD")
+	conf.AUTH_USER = os.Getenv("AUTH_USER")
+	if len(conf.AUTH_USER) != 0 && len(conf.AUTH_PASS) != 0 {
+		token := base64.StdEncoding.EncodeToString(Encrypt([]byte(conf.AUTH_USER+":"+conf.AUTH_PASS), SALT))
 		fmt.Println("Authorization turned on, the the token is :", token)
 	}
 
@@ -38,283 +37,20 @@ func init() {
 }
 
 func main() {
-	InitDocker()
-	initServer()
+	driver.InitDocker()
+	startServer()
 }
 
-type Container struct {
-	Repo string           `json:"repo"`
-	Tag  string           `json:"tag"`
-	Name string           `json:"name"`
-	Opts ContainerOptions `json:"opts"`
-}
-
-type ContainerOptions struct {
-	// Publish equals to -p flag e.g. Publish: {"8080:80", "4431:443"}
-	Publish []string `json:"publish"`
-	// Network equals to --network flag
-	Network string       `json:"network"`
-	Mount   []HostVolume `json:"mount"`
-}
-
-type HostVolume struct {
-	Bind string `json:"bind"`
-	Type string `json:"type"`
-}
-
-func (c Container) Pull() (err error) {
-
-	if err = DockerClient.PullImage(docker.PullImageOptions{
-		Repository:    c.Repo,
-		Tag:           c.Tag,
-		OutputStream:  nil,
-		RawJSONStream: false,
-	}, docker.AuthConfiguration{
-		Username: AUTH_USER,
-		Password: AUTH_PASS,
-	}); err != nil {
-		log.Error(err)
-		return
-	}
-
-	return
-}
-
-func (c Container) Start() (err error) {
-
-	dct, err := DockerClient.CreateContainer(docker.CreateContainerOptions{
-		Name: c.Name,
-		Config: &docker.Config{
-			ExposedPorts: c.CreateExposePorts(),
-			Image:        c.Repo + ":" + c.Tag,
-		},
-		HostConfig: &docker.HostConfig{
-			PortBindings:    c.CreateBindingPorts(),
-			PublishAllPorts: true,
-			NetworkMode:     c.Opts.Network,
-			//Binds:           c.Opts.Binds,
-			Mounts: c.CreateHostMounts(),
-		},
-	})
-	if err != nil {
-		return err
-	}
-
-	if err = DockerClient.StartContainer(dct.ID, nil); err != nil {
-		return
-	}
-
-	return
-}
-
-func (c Container) CreateHostMounts() []docker.HostMount {
-	hostMounts := []docker.HostMount{}
-	if c.Opts.Mount != nil {
-		for _, b := range c.Opts.Mount {
-			data := strings.Split(b.Bind, ":")
-			//src, _ := filepath.Abs(data[0])
-			//log.Debug(src)
-			if len(data) != 2 {
-				continue
-			}
-			hm := docker.HostMount{
-				Target:   data[1],
-				Source:   data[0],
-				ReadOnly: false,
-				Type:     b.Type,
-			}
-			hostMounts = append(hostMounts, hm)
-		}
-	}
-
-	return hostMounts
-}
-
-func (c Container) CreateExposePorts() map[docker.Port]struct{} {
-	ports := map[docker.Port]struct{}{}
-
-	for _, v := range c.Opts.Publish {
-		portMap := strings.Split(v, ":")
-		dockerPort := portMap[1]
-
-		ports[docker.Port(dockerPort+"/tcp")] = struct{}{}
-		ports[docker.Port(dockerPort+"/udp")] = struct{}{}
-	}
-
-	log.Debug("exposed ports:", ports)
-	return ports
-}
-
-func (c Container) CreateBindingPorts() map[docker.Port][]docker.PortBinding {
-	ports := map[docker.Port][]docker.PortBinding{}
-
-	for _, v := range c.Opts.Publish {
-		portMap := strings.Split(v, ":")
-		dockerPort := portMap[1]
-		hostPort := portMap[0]
-		ports[docker.Port(dockerPort+"/tcp")] = []docker.PortBinding{docker.PortBinding{HostPort: hostPort, HostIP: "0.0.0.0"}}
-		ports[docker.Port(dockerPort+"/udp")] = []docker.PortBinding{docker.PortBinding{HostPort: hostPort, HostIP: "0.0.0.0"}}
-	}
-
-	log.Debug("binding ports:", ports)
-	return ports
-}
-
-func initServer() {
+func startServer() {
 	e := echo.New()
 	e.Use(Auth)
-	// create container
-	// curl -H 'Content-Type:application/json' -d '{"repo": "nginx", "tag": "latest", "name": "mynginx", "opts": {"publish": ["10005:80"]}}' 'localhost:8080/container'
-	e.POST("/container", func(c echo.Context) (err error) {
-		//createcadvisor()
-		ct := Container{}
-		if err = c.Bind(&ct); err != nil {
-			return err
-		}
-		log.Debug(ct)
-		//var port docker.port = "80"
-
-		if err = ct.Start(); err != nil {
-			return
-		}
-
-		return
-	})
-
-	e.DELETE("/container/:name", func(c echo.Context) (err error) {
-		act, err := GetContainerByName(c.Param("name"))
-
-		if err != nil {
-			log.Error(err)
-			return err
-		}
-
-		if reflect.DeepEqual(act, docker.APIContainers{}) {
-			log.Debug("no container found")
-			return
-		}
-
-		if act.State != "running" {
-			if err = DockerClient.RemoveContainer(docker.RemoveContainerOptions{
-				ID: act.ID,
-			}); err != nil {
-				log.Error(err)
-				return
-			}
-		}
-
-		if err = DockerClient.StopContainer(act.ID, 0); err != nil {
-			log.Error(err)
-			return
-		}
-
-		return
-	})
-
-	e.PUT("/container", func(c echo.Context) (err error) {
-		ct := Container{}
-		if err = c.Bind(&ct); err != nil {
-			log.Error(err)
-			return err
-		}
-		log.Debug(ct)
-
-		if err = ct.Pull(); err != nil {
-			log.Error(err)
-			return
-		}
-
-		act, err := GetContainerByName(ct.Name)
-		if err != nil {
-			log.Error(err)
-			return err
-		}
-		// no container found created before
-		// create one
-		if reflect.DeepEqual(act, docker.APIContainers{}) {
-			log.Debug("no container found")
-			if err = ct.Start(); err != nil {
-				log.Error(err)
-				return
-			}
-			return
-		}
-
-		log.Debug(act)
-
-		if err = DockerClient.StopContainer(act.ID, 0); err != nil {
-			if _, ok := err.(*docker.ContainerNotRunning); ok {
-				log.Debug("container is stopped")
-			} else {
-				log.Error(err)
-				return
-			}
-		}
-
-		if err = DockerClient.RemoveContainer(docker.RemoveContainerOptions{
-			ID:    act.ID,
-			Force: true,
-		}); err != nil {
-			log.Error(err)
-			return
-		}
-
-		if err = ct.Start(); err != nil {
-			return
-		}
-
-		return
-	})
-
-	// get container by name
-	e.GET("/container/:name", func(c echo.Context) (err error) {
-		containerName := c.Param("name")
-		container, err := GetContainerByName(containerName)
-		if err != nil {
-			return err
-		}
-
-		log.Debug(container)
-		return
-	})
-
-	e.GET("/ping", func(c echo.Context) error {
-		return c.String(http.StatusOK, "pong")
-	})
-
 	log.Fatal(e.Start(":8080"))
-}
-
-func GetContainerByName(name string) (container docker.APIContainers, err error) {
-	cts, err := DockerClient.ListContainers(docker.ListContainersOptions{
-		All:     true,
-		Size:    false,
-		Limit:   0,
-		Since:   "",
-		Before:  "",
-		Filters: nil,
-		Context: nil,
-	})
-	if err != nil {
-		return
-	}
-	//log.Debug(cts)
-	for _, v := range cts {
-		for _, n := range v.Names {
-			if ("/" + name) == n {
-				container = v
-				log.Debug("got")
-				return
-			}
-		}
-	}
-
-	return
 }
 
 func Auth(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) (err error) {
 		defer func() {
+			// cipher method may panic
 			if panicErr := recover(); panicErr != nil {
 				c.String(http.StatusUnauthorized, "authorize failed, wrong crypto method")
 				return
@@ -333,7 +69,7 @@ func Auth(next echo.HandlerFunc) echo.HandlerFunc {
 		}()
 
 		// not specify auth method skip
-		if len(AUTH_PASS) == 0 || len(AUTH_USER) == 0 {
+		if len(conf.AUTH_PASS) == 0 || len(conf.AUTH_USER) == 0 {
 			return nil
 		}
 
@@ -351,7 +87,7 @@ func Auth(next echo.HandlerFunc) echo.HandlerFunc {
 			return errors.New("authorize failed")
 		}
 
-		if up[0] != AUTH_USER || up[1] != AUTH_PASS {
+		if up[0] != conf.AUTH_USER || up[1] != conf.AUTH_PASS {
 			return errors.New("authorize failed")
 		}
 

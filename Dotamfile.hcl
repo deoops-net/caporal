@@ -10,5 +10,5 @@ docker {
 var "release" {
   prod = "v0.1.0"
   // add mount support
-  release = "v0.1.44"
+  release = "v0.1.54"
 }
